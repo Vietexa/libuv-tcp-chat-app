@@ -3,46 +3,23 @@
 #include <string.h>
 #include <uv.h>
 
+#include "include/alloc.h"
+#include "include/data_structures.h"
+#include "include/parser.h"
+
 #define DEFAULT_PORT 7000
 #define DEFAULT_BACKLOG 128
 
-typedef struct clients_t{
-uv_tcp_t **clients_ptr;
-int client_count;
-int client_capacity;
-} clients_t;
-
-typedef struct app_ctx_t{
-    uv_loop_t *loop;
-    struct sockaddr_in addr;
-    clients_t clients;
+int get_current_peer(app_ctx_t *app_context, uv_stream_t *client){
     
-} app_ctx_t;
+    for (int i = 0; i < app_context->clients.client_capacity; i++){
+        uv_tcp_t *peer = app_context->clients.peers[i]->client;
 
-typedef struct {
-    uv_write_t req;
-    uv_buf_t buf;
-} write_req_t;
+        if (!peer) continue;
+        if (peer == (uv_tcp_t*)client) return i;
 
-int realloc_clients(app_ctx_t *ctx){
-size_t old_capacity = ctx->clients.client_capacity;
-size_t new_capacity = old_capacity * 2;
-
-uv_tcp_t **tmp = realloc(ctx->clients.clients_ptr, sizeof(*ctx->clients.clients_ptr) * new_capacity);
-
-if (tmp){
-    ctx->clients.clients_ptr = tmp;
-    ctx->clients.client_capacity = new_capacity;
-
-    for (int i = old_capacity; i < new_capacity; i++){
-        ctx->clients.clients_ptr[i] = NULL;
     }
-    return 0;
-}
-else{
-    fprintf(stderr, "realloc_clients: There was a problem reallocating space\n");
-    return 1;
-}
+    return -1;
 }
 
 void free_write_req(uv_write_t *req) {
@@ -61,9 +38,9 @@ void on_close(uv_handle_t* handle) {
     
     for (int i = 0; i < app_ctx->clients.client_capacity; i++) {
 
-        if (app_ctx->clients.clients_ptr[i] == (uv_tcp_t*)handle) {
+        if (app_ctx->clients.peers[i]->client == (uv_tcp_t*)handle) {
 
-            app_ctx->clients.clients_ptr[i] = NULL;
+            app_ctx->clients.peers[i]->client = NULL;
             app_ctx->clients.client_count--;
 
             break;
@@ -89,9 +66,33 @@ void echo_read(uv_stream_t *client, ssize_t nread, const uv_buf_t *buf) {
         printf("%.*s\n", (int)nread, buf->base);
         fflush(stdout);
 
+        char buf_copy[nread + 1];
+
+        strncpy(buf_copy, buf->base,nread);
+        buf_copy[nread] = '\0';
+
+        parse_packet(buf_copy, nread,&app_context->res);
+
+        int current_peer = get_current_peer(app_context, client);
+
+        if (strcmp(app_context->res.key_positions[0], "name") == 0){
+            char *name = app_context->res.value_positions[0];
+            printf("[i]the name is: %s\n", name);
+
+            printf("key[0]=%s\n", app_context->res.key_positions[0]);
+            printf("val[0]=%s\n", app_context->res.value_positions[0]); 
+            
+            if (current_peer >= 0 && name) {
+            name[strcspn(name, "\r\n")] = '\0';
+            snprintf(app_context->clients.peers[current_peer]->name,
+             sizeof (app_context->clients.peers[current_peer]->name),
+             "%s", name);
+             }
+        }
+        
         for (int i = 0; i < app_context->clients.client_capacity; i++) {
 
-            uv_tcp_t *peer = app_context->clients.clients_ptr[i];
+            uv_tcp_t *peer = app_context->clients.peers[i]->client;
 
             if (!peer)
                 continue;
@@ -101,11 +102,12 @@ void echo_read(uv_stream_t *client, ssize_t nread, const uv_buf_t *buf) {
 
             write_req_t *req = malloc(sizeof(write_req_t));
 
-            req->buf.base = malloc(nread);
+            int name_len = strlen(app_context->clients.peers[current_peer]->name);
+            req->buf.base = malloc(nread + name_len + 7); // said:
 
-            memcpy(req->buf.base, buf->base, nread);
+            snprintf(req->buf.base, nread + name_len + 8, "%s said: %.*s",app_context->clients.peers[current_peer]->name, (int)nread, buf->base);
 
-            req->buf.len = nread;
+            req->buf.len = nread + name_len + 8;
 
             uv_write(
                 (uv_write_t*)req,
@@ -154,8 +156,8 @@ void on_new_connection(uv_stream_t *server, int status) {
 
         for (int i = 0; i < app->clients.client_capacity; i++){
             
-            if (!app->clients.clients_ptr[i]){
-                app->clients.clients_ptr[i] = client;
+            if (!app->clients.peers[i]->client){
+                app->clients.peers[i]->client = client;
                 app->clients.client_count++;
                 break;
             }
@@ -163,7 +165,7 @@ void on_new_connection(uv_stream_t *server, int status) {
 
         printf("Client count: %d\n", app->clients.client_count);
         printf("Client capacity: %d\n", app->clients.client_capacity);
-        
+
         uv_read_start((uv_stream_t*) client, alloc_buffer, echo_read);
     }
     else {
@@ -173,17 +175,24 @@ void on_new_connection(uv_stream_t *server, int status) {
 
 int main(void) {
     app_ctx_t app_ctx = {0};
-    app_ctx.clients.clients_ptr = malloc(sizeof(*app_ctx.clients.clients_ptr) * 1);
+    memset(app_ctx.res.key_positions, 0, sizeof(app_ctx.res.key_positions));
+    memset(app_ctx.res.value_positions, 0, sizeof(app_ctx.res.value_positions));
     app_ctx.clients.client_capacity = 1;
+    app_ctx.clients.peers = calloc(app_ctx.clients.client_capacity,
+                                   sizeof(*app_ctx.clients.peers));
+
+for (int i = 0; i < app_ctx.clients.client_capacity; i++) {
+        app_ctx.clients.peers[i] = calloc(1, sizeof(*app_ctx.clients.peers[i]));
+    }
 
     app_ctx.loop = uv_default_loop();
 
     uv_tcp_t server;
-    server.data = &app_ctx;
-
+    
     app_ctx.clients.client_count = 0;
 
     uv_tcp_init(app_ctx.loop, &server);
+    server.data = &app_ctx;
 
     uv_ip4_addr("0.0.0.0", DEFAULT_PORT, &app_ctx.addr);
 

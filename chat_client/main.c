@@ -122,7 +122,7 @@ void echo_read(uv_stream_t *server, ssize_t nread, const uv_buf_t* buf) {
     app_ctx *ctx = server->data;
    if (nread > 0) {
         printf("\r\033[2K");
-        printf("result: %.*s\n", (int)nread, buf->base);
+        printf("%.*s\n", (int)nread, buf->base);
         printf("> ");
         
         fwrite(
