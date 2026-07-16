@@ -3,6 +3,8 @@
 
 
 void parse_packet(char *buffer, int nread, parsing_res_t *res){
+// Purpose: Parse the packet and store the position of the keys
+// and the values in their containers
 
 char *start = buffer;
 int param_count = 0;

@@ -3,7 +3,7 @@
 #include "include/data_structures.h"
 #include "stdlib.h"
 
-
+// Purpose: Helper function to reallocate the clients
 int realloc_clients(app_ctx_t *ctx){
 size_t old_capacity = ctx->clients.client_capacity;
 size_t new_capacity = old_capacity * 2;

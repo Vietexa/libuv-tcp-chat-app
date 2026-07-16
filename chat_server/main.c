@@ -7,6 +7,13 @@
 #include "include/data_structures.h"
 #include "include/parser.h"
 
+/* NOTE: 
+This example doesn't yet contain comments, if you're new to libuv and 
+are here to learn how to use it I highly suggest checking out the client
+example from this directory first, as that one has comments.
+*/
+
+
 #define DEFAULT_PORT 7000
 #define DEFAULT_BACKLOG 128
 
